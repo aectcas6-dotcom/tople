@@ -6,7 +6,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
-import { MarketType } from "./models/index";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +13,7 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
+  const isProduction = process.env.NODE_ENV === "production" || process.env.RENDER === "true";
 
   // Ensure public/logos directory exists
   const logosDir = path.join(__dirname, "public", "logos");
@@ -24,7 +24,7 @@ async function startServer() {
   // Logo Proxy Route
   app.get("/api/logos/:symbol", async (req, res) => {
     const symbol = req.params.symbol.toUpperCase();
-    
+
     // 1. Check if logo exists locally (try svg then png)
     const extensions = ["svg", "png", "jpg", "jpeg"];
     for (const ext of extensions) {
@@ -52,7 +52,7 @@ async function startServer() {
           fs.writeFileSync(savePath, Buffer.from(response.data));
           return res.sendFile(savePath);
         }
-      } catch (error) {
+      } catch {
         // Continue to next source
       }
     }
@@ -67,7 +67,7 @@ async function startServer() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -97,10 +97,10 @@ async function startServer() {
 
   function subscribeToBybit(ws: WebSocket, cfg: any) {
     if (!cfg.symbols || cfg.symbols.length === 0) return;
-    
+
     const configKey = `${cfg.exchange}:${cfg.marketType}`;
     console.log(`[Global WS] Subscribing to Bybit symbols for ${configKey} (Count: ${cfg.symbols.length})`);
-    
+
     // Clear existing timers for this socket to avoid overlapping subscription bursts
     if (bybitSubscriptionTimers.has(configKey)) {
       bybitSubscriptionTimers.get(configKey)?.forEach(t => clearTimeout(t));
@@ -111,15 +111,15 @@ async function startServer() {
     const symbols = cfg.symbols;
     const chunkSize = 10;
     const depth = 50; // Use 50 for both to be safe and consistent
-    
+
     for (let i = 0; i < symbols.length; i += chunkSize) {
       const chunk = symbols.slice(i, i + chunkSize);
       const subMsg = {
-        op: 'subscribe',
+        op: "subscribe",
         args: chunk.map((s: string) => `orderbook.${depth}.${s.toUpperCase()}`),
         req_id: `sub_${Date.now()}_${i}`
       };
-      
+
       const timer = setTimeout(() => {
         if (ws.readyState === WebSocket.OPEN) {
           try {
@@ -133,10 +133,10 @@ async function startServer() {
     }
   }
 
-  function subscribeTickersBybit(ws: WebSocket, exchange: string, marketType: MarketType, tickers: any[]) {
+  function subscribeTickersBybit(ws: WebSocket, exchange: string, marketType: string, tickers: any[]) {
     if (!tickers || tickers.length === 0) return;
     const subMsg = {
-      op: 'subscribe',
+      op: "subscribe",
       args: tickers.map(t => `tickers.${t.symbol.toUpperCase()}`),
       req_id: `sub_tickers_${Date.now()}`
     };
@@ -147,10 +147,10 @@ async function startServer() {
 
   function subscribeToBinance(ws: WebSocket, cfg: any) {
     if (!cfg.subscriptionMessages || cfg.subscriptionMessages.length === 0) return;
-    
+
     const configKey = `${cfg.exchange}:${cfg.marketType}`;
     console.log(`[Global WS] Subscribing to Binance symbols for ${configKey}`);
-    
+
     cfg.subscriptionMessages.forEach((msg: any, i: number) => {
       setTimeout(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -164,7 +164,7 @@ async function startServer() {
     });
   }
 
-  function subscribeTickersBinance(ws: WebSocket, exchange: string, marketType: MarketType, tickers: any[]) {
+  function subscribeTickersBinance(ws: WebSocket, exchange: string, marketType: string, tickers: any[]) {
     if (!tickers || tickers.length === 0) return;
     const subMsg = {
       method: "SUBSCRIBE",
@@ -178,15 +178,15 @@ async function startServer() {
 
   function getExchangeSocket(cfg: any) {
     const configKey = `${cfg.exchange}:${cfg.marketType}`;
-    
+
     if (globalExchangeSockets.has(configKey)) {
       const socket = globalExchangeSockets.get(configKey);
       if (socket?.readyState === WebSocket.OPEN) {
         // If already open, we MUST re-subscribe for Bybit to trigger a snapshot for the new client
         // This is critical because the client engine ignores deltas until it gets a snapshot
-        if (cfg.exchange.startsWith('Bybit')) {
+        if (cfg.exchange.startsWith("Bybit")) {
           subscribeToBybit(socket, cfg);
-        } else if (cfg.exchange.startsWith('Binance')) {
+        } else if (cfg.exchange.startsWith("Binance")) {
           subscribeToBinance(socket, cfg);
         }
         return socket;
@@ -202,9 +202,9 @@ async function startServer() {
 
     ws.on("open", () => {
       console.log(`[Global WS] Shared connection OPEN for ${configKey}`);
-      if (cfg.exchange.startsWith('Bybit')) {
+      if (cfg.exchange.startsWith("Bybit")) {
         subscribeToBybit(ws, cfg);
-      } else if (cfg.exchange.startsWith('Binance')) {
+      } else if (cfg.exchange.startsWith("Binance")) {
         subscribeToBinance(ws, cfg);
       }
     });
@@ -212,23 +212,23 @@ async function startServer() {
     ws.on("message", (data) => {
       const subscribers = exchangeSubscribers.get(configKey);
       const tickers = tickerSubscribers.get(configKey);
-      
+
       if ((subscribers && subscribers.size > 0) || (tickers && tickers.size > 0)) {
         try {
           const rawData = data.toString();
-          
+
           // Filter out control messages to save bandwidth
           if (rawData.includes('"op":"pong"') || rawData.includes('"ret_msg":"pong"')) return;
           if (rawData.includes('"success":true') && rawData.includes('"op":"subscribe"')) return;
 
           const parsed = JSON.parse(rawData);
-          
+
           // Determine if this is ticker data
           let isTicker = false;
-          if (cfg.exchange.startsWith('Bybit')) {
-            isTicker = parsed.topic?.startsWith('tickers');
-          } else if (cfg.exchange.startsWith('Binance')) {
-            isTicker = parsed.e === '24hrTicker' || (parsed.data && parsed.data.e === '24hrTicker');
+          if (cfg.exchange.startsWith("Bybit")) {
+            isTicker = parsed.topic?.startsWith("tickers");
+          } else if (cfg.exchange.startsWith("Binance")) {
+            isTicker = parsed.e === "24hrTicker" || (parsed.data && parsed.data.e === "24hrTicker");
           }
 
           if (isTicker) {
@@ -248,12 +248,12 @@ async function startServer() {
           }
 
           // Cache Bybit snapshots
-          if (cfg.exchange.startsWith('Bybit') && parsed.type === 'snapshot' && parsed.topic) {
+          if (cfg.exchange.startsWith("Bybit") && parsed.type === "snapshot" && parsed.topic) {
             snapshotCache.set(`${configKey}:${parsed.topic}`, parsed);
           }
-          
+
           // Cache Binance messages (treat as snapshots for new clients)
-          if (cfg.exchange.startsWith('Binance')) {
+          if (cfg.exchange.startsWith("Binance")) {
             const symbol = parsed.s || (parsed.data && parsed.data.s);
             if (symbol) {
               snapshotCache.set(`${configKey}:${symbol.toUpperCase()}`, parsed);
@@ -268,13 +268,13 @@ async function startServer() {
             marketType: cfg.marketType,
             data: parsed
           });
-          
+
           subscribers?.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
               client.send(message);
             }
           });
-        } catch (e) {
+        } catch {
           // Ignore malformed JSON or other parsing errors
         }
       }
@@ -294,7 +294,7 @@ async function startServer() {
         bybitSubscriptionTimers.get(configKey)?.forEach(t => clearTimeout(t));
         bybitSubscriptionTimers.delete(configKey);
       }
-      
+
       setTimeout(() => {
         const subs = exchangeSubscribers.get(configKey);
         if (subs && subs.size > 0) {
@@ -306,7 +306,7 @@ async function startServer() {
     ws.on("error", (err) => {
       const errorMessage = err.message;
       console.error(`[Global WS] Shared connection ERROR for ${configKey}:`, errorMessage);
-      
+
       // Notify all subscribers about the error
       const subscribers = exchangeSubscribers.get(configKey);
       if (subscribers && subscribers.size > 0) {
@@ -315,7 +315,7 @@ async function startServer() {
           exchange: cfg.exchange,
           marketType: cfg.marketType,
           message: errorMessage,
-          isRegionalBlock: errorMessage.includes('451')
+          isRegionalBlock: errorMessage.includes("451")
         });
         subscribers.forEach(client => {
           if (client.readyState === WebSocket.OPEN) {
@@ -328,10 +328,10 @@ async function startServer() {
     // Heartbeat
     const pingInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
-        if (cfg.exchange.startsWith('Bybit')) {
-          ws.send(JSON.stringify({ op: 'ping' }));
-        } else if (cfg.exchange.startsWith('Binance')) {
-          ws.ping(); 
+        if (cfg.exchange.startsWith("Bybit")) {
+          ws.send(JSON.stringify({ op: "ping" }));
+        } else if (cfg.exchange.startsWith("Binance")) {
+          ws.ping();
         }
       } else if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
         clearInterval(pingInterval);
@@ -348,11 +348,11 @@ async function startServer() {
     clientWs.on("message", (message) => {
       try {
         const payload = JSON.parse(message.toString());
-        
+
         if (payload.type === "CONNECT_EXCHANGES") {
           const configs = payload.configs;
           const tickers = payload.tickers || [];
-          
+
           // Clear old subscriptions for this client
           clientSubscriptions.forEach(key => {
             exchangeSubscribers.get(key)?.delete(clientWs);
@@ -363,12 +363,12 @@ async function startServer() {
           configs.forEach((cfg: any) => {
             const configKey = `${cfg.exchange}:${cfg.marketType}`;
             clientSubscriptions.add(configKey);
-            
+
             if (!exchangeSubscribers.has(configKey)) {
               exchangeSubscribers.set(configKey, new Set());
             }
             exchangeSubscribers.get(configKey)!.add(clientWs);
-            
+
             // Ensure the shared socket exists
             const ws = getExchangeSocket(cfg);
 
@@ -380,15 +380,15 @@ async function startServer() {
               }
               tickerSubscribers.get(configKey)!.add(clientWs);
 
-              if (cfg.exchange.startsWith('Bybit')) {
+              if (cfg.exchange.startsWith("Bybit")) {
                 subscribeTickersBybit(ws, cfg.exchange, cfg.marketType, relevantTickers);
-              } else if (cfg.exchange.startsWith('Binance')) {
+              } else if (cfg.exchange.startsWith("Binance")) {
                 subscribeTickersBinance(ws, cfg.exchange, cfg.marketType, relevantTickers);
               }
             }
 
             // Send cached snapshots immediately to the new client
-            if (cfg.exchange.startsWith('Bybit') || cfg.exchange.startsWith('Binance')) {
+            if (cfg.exchange.startsWith("Bybit") || cfg.exchange.startsWith("Binance")) {
               const prefix = `${configKey}:`;
               snapshotCache.forEach((snapshot, key) => {
                 if (key.startsWith(prefix)) {
@@ -415,15 +415,11 @@ async function startServer() {
             tickerSubscribers.get(configKey)!.add(clientWs);
             clientSubscriptions.add(configKey);
 
-            // Find or create the exchange socket
-            // We need the full config to create it if it doesn't exist
-            // For now assume it exists or we have enough info
-            // Actually we should probably have a way to get the base URL
             const ws = globalExchangeSockets.get(configKey);
             if (ws) {
-              if (t.exchange.startsWith('Bybit')) {
+              if (t.exchange.startsWith("Bybit")) {
                 subscribeTickersBybit(ws, t.exchange, t.marketType, [t]);
-              } else if (t.exchange.startsWith('Binance')) {
+              } else if (t.exchange.startsWith("Binance")) {
                 subscribeTickersBinance(ws, t.exchange, t.marketType, [t]);
               }
             }
@@ -438,6 +434,7 @@ async function startServer() {
       console.log("[WS Proxy] Client disconnected");
       clientSubscriptions.forEach(key => {
         exchangeSubscribers.get(key)?.delete(clientWs);
+        tickerSubscribers.get(key)?.delete(clientWs);
       });
     });
   });
@@ -447,4 +444,7 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("SERVER START FAILED:", err);
+  process.exit(1);
+});
