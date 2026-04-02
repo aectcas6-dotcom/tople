@@ -13,10 +13,13 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
-  const isProduction = process.env.NODE_ENV === "production" || process.env.RENDER === "true";
+  const isProduction =
+    process.env.NODE_ENV === "production" || process.env.RENDER === "true";
+
+  const baseDir = isProduction ? process.cwd() : __dirname;
 
   // Ensure public/logos directory exists
-  const logosDir = path.join(__dirname, "public", "logos");
+  const logosDir = path.join(baseDir, "public", "logos");
   if (!fs.existsSync(logosDir)) {
     fs.mkdirSync(logosDir, { recursive: true });
   }
@@ -46,7 +49,11 @@ async function startServer() {
 
     for (const source of sources) {
       try {
-        const response = await axios.get(source.url, { responseType: "arraybuffer", timeout: 3000 });
+        const response = await axios.get(source.url, {
+          responseType: "arraybuffer",
+          timeout: 3000
+        });
+
         if (response.status === 200) {
           const savePath = path.join(logosDir, `${symbol}.${source.ext}`);
           fs.writeFileSync(savePath, Buffer.from(response.data));
@@ -58,7 +65,9 @@ async function startServer() {
     }
 
     // 3. Fallback to UI Avatars
-    res.redirect(`https://ui-avatars.com/api/?name=${symbol}&background=1a1a1a&color=fff&bold=true&font-size=0.33`);
+    res.redirect(
+      `https://ui-avatars.com/api/?name=${symbol}&background=1a1a1a&color=fff&bold=true&font-size=0.33`
+    );
   });
 
   // API Health
@@ -75,9 +84,12 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Serve static files in production
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
+    const distPath = path.join(baseDir, "dist");
+    app.use(express.static(distPath));
+
+    // SPA fallback for Express 5 / Render
+    app.use((req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
@@ -99,11 +111,13 @@ async function startServer() {
     if (!cfg.symbols || cfg.symbols.length === 0) return;
 
     const configKey = `${cfg.exchange}:${cfg.marketType}`;
-    console.log(`[Global WS] Subscribing to Bybit symbols for ${configKey} (Count: ${cfg.symbols.length})`);
+    console.log(
+      `[Global WS] Subscribing to Bybit symbols for ${configKey} (Count: ${cfg.symbols.length})`
+    );
 
     // Clear existing timers for this socket to avoid overlapping subscription bursts
     if (bybitSubscriptionTimers.has(configKey)) {
-      bybitSubscriptionTimers.get(configKey)?.forEach(t => clearTimeout(t));
+      bybitSubscriptionTimers.get(configKey)?.forEach((t) => clearTimeout(t));
     }
     const timers: NodeJS.Timeout[] = [];
     bybitSubscriptionTimers.set(configKey, timers);
@@ -117,7 +131,7 @@ async function startServer() {
       const subMsg = {
         op: "subscribe",
         args: chunk.map((s: string) => `orderbook.${depth}.${s.toUpperCase()}`),
-        req_id: `sub_${Date.now()}_${i}`
+        req_id: `sub_${Date.now()}_${i}`,
       };
 
       const timer = setTimeout(() => {
@@ -133,12 +147,17 @@ async function startServer() {
     }
   }
 
-  function subscribeTickersBybit(ws: WebSocket, exchange: string, marketType: string, tickers: any[]) {
+  function subscribeTickersBybit(
+    ws: WebSocket,
+    exchange: string,
+    marketType: any,
+    tickers: any[]
+  ) {
     if (!tickers || tickers.length === 0) return;
     const subMsg = {
       op: "subscribe",
-      args: tickers.map(t => `tickers.${t.symbol.toUpperCase()}`),
-      req_id: `sub_tickers_${Date.now()}`
+      args: tickers.map((t) => `tickers.${t.symbol.toUpperCase()}`),
+      req_id: `sub_tickers_${Date.now()}`,
     };
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(subMsg));
@@ -164,12 +183,17 @@ async function startServer() {
     });
   }
 
-  function subscribeTickersBinance(ws: WebSocket, exchange: string, marketType: string, tickers: any[]) {
+  function subscribeTickersBinance(
+    ws: WebSocket,
+    exchange: string,
+    marketType: any,
+    tickers: any[]
+  ) {
     if (!tickers || tickers.length === 0) return;
     const subMsg = {
       method: "SUBSCRIBE",
-      params: tickers.map(t => `${t.symbol.toLowerCase()}@ticker`),
-      id: Date.now()
+      params: tickers.map((t) => `${t.symbol.toLowerCase()}@ticker`),
+      id: Date.now(),
     };
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(subMsg));
@@ -196,7 +220,9 @@ async function startServer() {
       }
     }
 
-    console.log(`[Global WS] Creating shared connection for ${configKey} -> ${cfg.wsUrl}`);
+    console.log(
+      `[Global WS] Creating shared connection for ${configKey} -> ${cfg.wsUrl}`
+    );
     const ws = new WebSocket(cfg.wsUrl);
     globalExchangeSockets.set(configKey, ws);
 
@@ -237,9 +263,9 @@ async function startServer() {
               dataType: "TICKER",
               exchange: cfg.exchange,
               marketType: cfg.marketType,
-              data: parsed
+              data: parsed,
             });
-            tickers?.forEach(client => {
+            tickers?.forEach((client) => {
               if (client.readyState === WebSocket.OPEN) {
                 client.send(message);
               }
@@ -266,10 +292,10 @@ async function startServer() {
             dataType: "DEPTH",
             exchange: cfg.exchange,
             marketType: cfg.marketType,
-            data: parsed
+            data: parsed,
           });
 
-          subscribers?.forEach(client => {
+          subscribers?.forEach((client) => {
             if (client.readyState === WebSocket.OPEN) {
               client.send(message);
             }
@@ -281,7 +307,9 @@ async function startServer() {
     });
 
     ws.on("close", () => {
-      console.warn(`[Global WS] Shared connection CLOSED for ${configKey}. Reconnecting in 5s...`);
+      console.warn(
+        `[Global WS] Shared connection CLOSED for ${configKey}. Reconnecting in 5s...`
+      );
       globalExchangeSockets.delete(configKey);
 
       // Clear cache for this exchange on close to avoid stale data
@@ -291,7 +319,7 @@ async function startServer() {
       }
 
       if (bybitSubscriptionTimers.has(configKey)) {
-        bybitSubscriptionTimers.get(configKey)?.forEach(t => clearTimeout(t));
+        bybitSubscriptionTimers.get(configKey)?.forEach((t) => clearTimeout(t));
         bybitSubscriptionTimers.delete(configKey);
       }
 
@@ -305,7 +333,10 @@ async function startServer() {
 
     ws.on("error", (err) => {
       const errorMessage = err.message;
-      console.error(`[Global WS] Shared connection ERROR for ${configKey}:`, errorMessage);
+      console.error(
+        `[Global WS] Shared connection ERROR for ${configKey}:`,
+        errorMessage
+      );
 
       // Notify all subscribers about the error
       const subscribers = exchangeSubscribers.get(configKey);
@@ -315,9 +346,9 @@ async function startServer() {
           exchange: cfg.exchange,
           marketType: cfg.marketType,
           message: errorMessage,
-          isRegionalBlock: errorMessage.includes("451")
+          isRegionalBlock: errorMessage.includes("451"),
         });
-        subscribers.forEach(client => {
+        subscribers.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
             client.send(errorPayload);
           }
@@ -354,7 +385,7 @@ async function startServer() {
           const tickers = payload.tickers || [];
 
           // Clear old subscriptions for this client
-          clientSubscriptions.forEach(key => {
+          clientSubscriptions.forEach((key) => {
             exchangeSubscribers.get(key)?.delete(clientWs);
             tickerSubscribers.get(key)?.delete(clientWs);
           });
@@ -373,7 +404,9 @@ async function startServer() {
             const ws = getExchangeSocket(cfg);
 
             // Handle tickers if provided in initial connect
-            const relevantTickers = tickers.filter((t: any) => t.exchange === cfg.exchange && t.marketType === cfg.marketType);
+            const relevantTickers = tickers.filter(
+              (t: any) => t.exchange === cfg.exchange && t.marketType === cfg.marketType
+            );
             if (relevantTickers.length > 0) {
               if (!tickerSubscribers.has(configKey)) {
                 tickerSubscribers.set(configKey, new Set());
@@ -392,13 +425,15 @@ async function startServer() {
               const prefix = `${configKey}:`;
               snapshotCache.forEach((snapshot, key) => {
                 if (key.startsWith(prefix)) {
-                  clientWs.send(JSON.stringify({
-                    type: "EXCHANGE_DATA",
-                    dataType: "DEPTH",
-                    exchange: cfg.exchange,
-                    marketType: cfg.marketType,
-                    data: snapshot
-                  }));
+                  clientWs.send(
+                    JSON.stringify({
+                      type: "EXCHANGE_DATA",
+                      dataType: "DEPTH",
+                      exchange: cfg.exchange,
+                      marketType: cfg.marketType,
+                      data: snapshot,
+                    })
+                  );
                 }
               });
             }
@@ -432,7 +467,7 @@ async function startServer() {
 
     clientWs.on("close", () => {
       console.log("[WS Proxy] Client disconnected");
-      clientSubscriptions.forEach(key => {
+      clientSubscriptions.forEach((key) => {
         exchangeSubscribers.get(key)?.delete(clientWs);
         tickerSubscribers.get(key)?.delete(clientWs);
       });
